@@ -11,7 +11,7 @@ ARDUINO_PORT = int(os.getenv('ARDUINO_PORT'))
 
 class ArduinoClient:
     def __init__(self, ip, port):
-        print(f"[ArduinoClient] Connecting to {ip}:{port}...")
+        # print(f"[ArduinoClient] Connecting to {ip}:{port}...")
         self.ip = ip
         self.port = port
         self.sock = None
@@ -28,7 +28,7 @@ class ArduinoClient:
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
             self.sock.connect((self.ip, self.port))
-            print(f"[ArduinoClient] Connected successfully!")
+            # print(f"[ArduinoClient] Connected successfully!")
         except Exception as e:
             print(f"[ArduinoClient] Connection FAILED: {e}")
             raise
@@ -65,6 +65,4 @@ class ArduinoClient:
             self.sock.close()
         print(f"[ArduinoClient] Closed!")
 
-print(f"[arduino.py] Initializing Arduino connection...")
 ardu = ArduinoClient(ARDUINO_IP, ARDUINO_PORT)
-print(f"[arduino.py] Arduino client initialized: {ardu}")
