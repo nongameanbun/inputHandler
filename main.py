@@ -143,7 +143,7 @@ if __name__ == "__main__":
         import os
 
         load_dotenv()
-        port_num = int(os.getenv("SERVER_PORT", None))
+        port_num = int(os.getenv("inputHandler_API_PORT"))
         assert port_num
     except Exception as e:
         print(e)

@@ -1,12 +1,13 @@
 # InputHandler.py
+import os
 import socket
 import time
 import dotenv
 
 dotenv.load_dotenv()
 
-ARDUINO_IP = dotenv.get_key(dotenv.find_dotenv(), "ARDUINO_IP")
-ARDUINO_PORT = int(dotenv.get_key(dotenv.find_dotenv(), "ARDUINO_PORT"))
+ARDUINO_IP = str(os.getenv('ARDUINO_IP'))
+ARDUINO_PORT = int(os.getenv('ARDUINO_PORT'))
 
 class ArduinoClient:
     def __init__(self, ip, port):
