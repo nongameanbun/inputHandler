@@ -110,10 +110,8 @@ async def mouse_dmove(dx: int, dy: int):
 async def mouse_move(x: int, y: int):
     import time as _t
     t0 = _t.perf_counter()
-    print(f"[mouse_move] START x={x}, y={y}")
     human_mouse.move_to_px_human(x, y)
     t1 = _t.perf_counter()
-    print(f"[mouse_move] move_to_px_human took {(t1-t0)*1000:.1f}ms")
 
     return {"resp": 0}
     
