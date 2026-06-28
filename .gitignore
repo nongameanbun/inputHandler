@@ -1,4 +1,30 @@
-.env
+# ===== Python =====
 __pycache__/
-*.pyc
+*.py[cod]
+
+# ===== 환경변수 / 시크릿 (.env.example 템플릿은 추적) =====
+.env
+.env.*
+!.env.example
+!env.example
+
+# ===== 가상환경 =====
+.venv/
+venv/
+env/
+ENV/
+
+# ===== 로그 / DB =====
+*.log
+*.sqlite3
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+.vs/
+*.user
 .DS_Store
+
+# ===== 모델 가중치 / 캐시 =====
+*.pkl
+*.pt
