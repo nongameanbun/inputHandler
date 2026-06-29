@@ -28,3 +28,10 @@ ENV/
 # ===== 모델 가중치 / 캐시 =====
 *.pkl
 *.pt
+*.pth
+*.npz
+
+# ===== mouse_model 데이터/체크포인트 (대용량, 로컬 생성물) =====
+mouse_model/data/
+mouse_model/checkpoints/
+mouse_model/**/*.png

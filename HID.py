@@ -1,9 +1,8 @@
 import ctypes
 import math
-import random
+import os
 import struct
 import time
-import numpy as np
 from base import Input_Q, ardu_lock
 
 user32 = ctypes.windll.user32
@@ -14,7 +13,7 @@ class key:
     ## press_key(key.a)
     ## release_key(key.f1)
     '''
-        
+
     # 알파벳
     a              = 0x61
     b              = 0x62
@@ -43,7 +42,7 @@ class key:
     y              = 0x79
     z              = 0x7a
 
-    
+
 
     # 펑션키 (F1~F12)
     f1              = 0xc2
@@ -140,9 +139,9 @@ class key:
 
     # -----------------------------------
     # 주의사항
-    # 1) 실제 키보드 물리 배열과 다를 수 있으므로, 
+    # 1) 실제 키보드 물리 배열과 다를 수 있으므로,
     #    이 표준 좌표는 상황에 맞게 조정이 필요합니다.
-    # 2) 일부 키(예: /, numpad_divide) 등은 표 상에서 
+    # 2) 일부 키(예: /, numpad_divide) 등은 표 상에서
     #    좌표 충돌이 날 수도 있으니, 사용 시 유의하세요.
     # 3) Shift, Ctrl, Alt 등은 좌/우 구분이 필요하다면
     #    각각 다른 코드를 부여해 관리할 수 있습니다.
@@ -168,228 +167,56 @@ def get_key_code(key_name: str) -> int:
 
 class HumanMouseController:
     """
-    HumanCursor(riflosnake/HumanCursor)의 파이프라인을 그대로 차용:
-      1. offset boundary 랜덤 설정
-      2. knot 개수 가중치 확률분포
-      3. 고차 Bezier (Bernstein polynomial)
-      4. distort (정규분포 노이즈)
-      5. tween (easeOut 계열 감속)
-      6. target_points (거리 기반 포인트 수)
-    
-    출력은 dMouse 커맨드 시퀀스 → Input_Q 투입.
+    학습된 MDN-LSTM(mouse_model) 궤적으로 절대좌표 마우스 이동을 수행.
+
+    move_to_px_human(x, y):
+      1. 현재 커서 위치(get_mouse_pos)에서 목표까지 모델이 8ms cadence 궤적 생성
+      2. perf_counter busy-wait 기반 정밀 pacing 으로 Arduino에 직접 전송
+      3. closed-loop 보정으로 목표에 정확히 안착
+
+    모델(checkpoints/model.pt)이 필수 — 없으면 RuntimeError.
     """
 
-    # ============ easeOut tween 함수들 (pytweening 대체) ============ #
-    @staticmethod
-    def _ease_out_quad(t):   return t * (2 - t)
-    @staticmethod
-    def _ease_out_cubic(t):  return 1 - (1 - t) ** 3
-    @staticmethod
-    def _ease_out_quart(t):  return 1 - (1 - t) ** 4
-    @staticmethod
-    def _ease_out_quint(t):  return 1 - (1 - t) ** 5
-    @staticmethod
-    def _ease_out_expo(t):   return 1.0 if t == 1.0 else 1 - 2 ** (-10 * t)
-    @staticmethod
-    def _ease_out_circ(t):   return math.sqrt(1 - (t - 1) ** 2)
-    @staticmethod
-    def _ease_out_sine(t):   return math.sin(t * math.pi / 2)
-    @staticmethod
-    def _ease_in_out_quad(t):
-        return 2 * t * t if t < 0.5 else 1 - (-2 * t + 2) ** 2 / 2
-    @staticmethod
-    def _ease_in_out_cubic(t):
-        return 4 * t * t * t if t < 0.5 else 1 - (-2 * t + 2) ** 3 / 2
-    @staticmethod
-    def _ease_in_out_quart(t):
-        return 8 * t ** 4 if t < 0.5 else 1 - (-2 * t + 2) ** 4 / 2
-    @staticmethod
-    def _ease_in_out_sine(t):
-        return -(math.cos(math.pi * t) - 1) / 2
-    @staticmethod
-    def _ease_in_out_quint(t):
-        return 16 * t ** 5 if t < 0.5 else 1 - (-2 * t + 2) ** 5 / 2
-    @staticmethod
-    def _ease_in_out_expo(t):
-        if t == 0.0: return 0.0
-        if t == 1.0: return 1.0
-        return 2 ** (20 * t - 10) / 2 if t < 0.5 else (2 - 2 ** (-20 * t + 10)) / 2
-    @staticmethod
-    def _ease_in_out_circ(t):
-        if t < 0.5:
-            return (1 - math.sqrt(1 - (2 * t) ** 2)) / 2
-        return (math.sqrt(1 - (-2 * t + 2) ** 2) + 1) / 2
-    @staticmethod
-    def _linear(t):          return t
+    # 학습 모델(mouse_model) 캐시 — 클래스 단위로 1회만 로드
+    _model_gen = None
+    _model_load_failed = False
 
-    # HumanCursor 원본과 동일한 13개 tween (pytweening 함수 순서 그대로)
-    TWEEN_OPTIONS = [
-        _ease_out_expo.__func__,
-        _ease_in_out_quint.__func__,
-        _ease_in_out_sine.__func__,
-        _ease_in_out_quart.__func__,
-        _ease_in_out_expo.__func__,
-        _ease_in_out_cubic.__func__,
-        _ease_in_out_circ.__func__,
-        _linear.__func__,
-        _ease_out_sine.__func__,
-        _ease_out_quart.__func__,
-        _ease_out_quint.__func__,
-        _ease_out_cubic.__func__,
-        _ease_out_circ.__func__,
-    ]
+    # ============ 학습 모델 로더 ============ #
 
-    def __init__(self):
-        # dMouse 1 단위 = 1 pixel (Arduino HID 기준)
-        self.px_per_cmd = 1.0
+    def _get_model(self):
+        """mouse_model/model.pt 를 1회 로드해 TrajectoryGenerator 반환. 실패 시 None."""
+        if HumanMouseController._model_gen is not None:
+            return HumanMouseController._model_gen
+        if HumanMouseController._model_load_failed:
+            return None
+        try:
+            ckpt = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "mouse_model", "model.pt")
+            if not os.path.exists(ckpt):
+                HumanMouseController._model_load_failed = True
+                return None
+            from mouse_model.sample import TrajectoryGenerator
+            HumanMouseController._model_gen = TrajectoryGenerator.load(ckpt, device="cpu")
+            print(f"[HumanMouse] 학습 모델 로드: {ckpt}")
+            return HumanMouseController._model_gen
+        except Exception as e:
+            print(f"[HumanMouse] 모델 로드 실패: {e}")
+            HumanMouseController._model_load_failed = True
+            return None
 
-        # 마지막 이동 동선 기록
-        self.last_trajectory: list[tuple[int, int]] = []
-
-    # ============ Bezier 수학 (HumanCursor BezierCalculator 동일) ============ #
-
-    @staticmethod
-    def _binomial(n, k):
-        return math.factorial(n) / float(math.factorial(k) * math.factorial(n - k))
-
-    @staticmethod
-    def _bernstein_polynomial_point(x, i, n):
-        return HumanMouseController._binomial(n, i) * (x ** i) * ((1 - x) ** (n - i))
-
-    @staticmethod
-    def _bernstein_polynomial(points):
-        def bernstein(t):
-            n = len(points) - 1
-            bx = by = 0.0
-            for i, pt in enumerate(points):
-                bern = HumanMouseController._bernstein_polynomial_point(t, i, n)
-                bx += pt[0] * bern
-                by += pt[1] * bern
-            return bx, by
-        return bernstein
-
-    @staticmethod
-    def _bezier_curve_points(n, points):
-        """n개의 포인트를 Bezier 곡선 위에서 균등 t로 샘플링."""
-        bern = HumanMouseController._bernstein_polynomial(points)
-        return [bern(i / max(n - 1, 1)) for i in range(n)]
-
-    # ============ HumanCursor 파이프라인 (generate_curve 동일) ============ #
-
-    def _generate_random_params(self, from_pt, to_pt):
-        """
-        HumanCursor generate_random_curve_parameters() 와 동일한 확률분포.
-        """
-        tween = random.choice(self.TWEEN_OPTIONS)
-
-        # HumanCursor 원본과 동일한 가중치 (원본: [0.2, 0.65, 15])
-        offset_boundary_x = random.choice(
-            random.choices(
-                [range(20, 45), range(45, 75), range(75, 100)],
-                [0.2, 0.65, 15]
-            )[0]
-        )
-        offset_boundary_y = random.choice(
-            random.choices(
-                [range(20, 45), range(45, 75), range(75, 100)],
-                [0.2, 0.65, 15]
-            )[0]
-        )
-
-        knots_count = random.choices(
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-            [0.15, 0.36, 0.17, 0.12, 0.08, 0.04, 0.03, 0.02, 0.015, 0.005],
-        )[0]
-
-        distortion_mean = random.choice(range(80, 110)) / 100
-        distortion_st_dev = random.choice(range(85, 110)) / 100
-        distortion_frequency = random.choice(range(25, 70)) / 100
-
-        target_points = max(
-            int(math.sqrt(
-                (from_pt[0] - to_pt[0]) ** 2 + (from_pt[1] - to_pt[1]) ** 2
-            )),
-            2
-        )
-
-        return (
-            offset_boundary_x, offset_boundary_y,
-            knots_count,
-            distortion_mean, distortion_st_dev, distortion_frequency,
-            tween, target_points,
-        )
-
-    def _generate_internal_knots(self, l, r, d, u, count):
-        """HumanCursor generate_internal_knots 동일 (np.random.choice 사용)."""
-        l, r, d, u = int(l), int(r), int(d), int(u)
-        if l > r:
-            l, r = r, l
-        if d > u:
-            d, u = u, d
-        if l == r:
-            r = l + 1
-        if d == u:
-            u = d + 1
-        kx = np.random.choice(range(l, r), size=count)
-        ky = np.random.choice(range(d, u), size=count)
-        return list(zip(kx.tolist(), ky.tolist()))
-
-    def _distort_points(self, points, mean, st_dev, frequency):
-        """HumanCursor distort_points 동일 (np.random.normal 사용)."""
-        distorted = []
-        for i in range(1, len(points) - 1):
-            x, y = points[i]
-            delta = (
-                np.random.normal(mean, st_dev)
-                if random.random() < frequency
-                else 0
-            )
-            distorted.append((x, y + delta))
-        return [points[0]] + distorted + [points[-1]]
-
-    def _tween_points(self, points, tween, target_points):
-        """HumanCursor tween_points 동일."""
-        if target_points < 2:
-            target_points = 2
-        res = []
-        for i in range(target_points):
-            idx = int(tween(float(i) / (target_points - 1)) * (len(points) - 1))
-            idx = max(0, min(idx, len(points) - 1))
-            res.append(points[idx])
-        return res
-
-    def _generate_curve(self, from_pt, to_pt):
-        """
-        HumanCursor HumanizeMouseTrajectory.generate_curve() 와 동일 파이프라인.
-        반환: [(x, y), ...] 포인트 시퀀스
-        """
-        (
-            off_bx, off_by, knots_count,
-            dist_mean, dist_std, dist_freq,
-            tween, target_points,
-        ) = self._generate_random_params(from_pt, to_pt)
-
-        left   = min(from_pt[0], to_pt[0]) - off_bx
-        right  = max(from_pt[0], to_pt[0]) + off_bx
-        down   = min(from_pt[1], to_pt[1]) - off_by
-        up     = max(from_pt[1], to_pt[1]) + off_by
-
-        knots = self._generate_internal_knots(left, right, down, up, knots_count)
-
-        control_points = [from_pt] + knots + [to_pt]
-
-        mid_count = max(
-            abs(int(from_pt[0]) - int(to_pt[0])),
-            abs(int(from_pt[1]) - int(to_pt[1])),
-            2
-        )
-        points = self._bezier_curve_points(mid_count, control_points)
-
-        points = self._distort_points(points, dist_mean, dist_std, dist_freq)
-
-        points = self._tween_points(points, tween, target_points)
-
-        return points
+    def _generate_curve_model(self, start_pt, target_pt):
+        """학습 모델로 화면 좌표 궤적(8ms cadence) 생성. 모델 없거나 실패 시 None."""
+        gen = self._get_model()
+        if gen is None:
+            return None
+        try:
+            pts = gen.generate(start_pt, target_pt)
+            if pts is None or len(pts) < 2:
+                return None
+            return pts
+        except Exception as e:
+            print(f"[HumanMouse] 모델 추론 실패: {e}")
+            return None
 
     # ============ 포인트 → dMouse 커맨드 변환 ============ #
 
@@ -426,48 +253,6 @@ class HumanMouseController:
 
         return commands
 
-    # ============ 리샘플링 ============ #
-
-    @staticmethod
-    def _resample_curve(points, n_out):
-        """
-        가변 간격의 포인트 시퀀스를 누적 호장(arc-length) 기반으로
-        n_out 개의 등간격 포인트로 리샘플링.
-        """
-        if n_out <= 2:
-            return [points[0], points[-1]]
-
-        # 누적 거리 계산
-        dists = [0.0]
-        for i in range(1, len(points)):
-            d = math.hypot(points[i][0] - points[i-1][0],
-                           points[i][1] - points[i-1][1])
-            dists.append(dists[-1] + d)
-
-        total_len = dists[-1]
-        if total_len < 1e-9:
-            return [points[0]] * n_out
-
-        result = []
-        seg = 0
-        for k in range(n_out):
-            target_dist = (k / (n_out - 1)) * total_len
-
-            while seg < len(dists) - 2 and dists[seg + 1] < target_dist:
-                seg += 1
-
-            seg_len = dists[seg + 1] - dists[seg]
-            if seg_len < 1e-9:
-                t = 0.0
-            else:
-                t = (target_dist - dists[seg]) / seg_len
-
-            x = points[seg][0] + t * (points[seg + 1][0] - points[seg][0])
-            y = points[seg][1] + t * (points[seg + 1][1] - points[seg][1])
-            result.append((x, y))
-
-        return result
-
     # ============ 메인: move_to_px_human ============ #
 
     # USB HID 폴링 주기를 고려한 최소 커맨드 간격
@@ -497,11 +282,6 @@ class HumanMouseController:
                 break
             time.sleep(0.0005)
 
-    def _send_one(self, dx: int, dy: int):
-        """dMouse 커맨드 1개를 큐에 넣고 소진될 때까지 대기."""
-        Input_Q.append(f"dMouse {dx} {dy}")
-        self._wait_queue_drain(timeout=0.5)
-
     def move_to_px_human(
         self,
         target_x: int,
@@ -510,57 +290,43 @@ class HumanMouseController:
         stop_dist: float = 1.0,
     ):
         """
-        HumanCursor 파이프라인 + 직접 pacing.
-        1. HumanCursor 곡선 생성 (고차 Bezier + tween)
-        2. duration / CMD_INTERVAL 개로 리샘플링 → 커맨드 수 제한
-        3. perf_counter busy-wait 기반 정밀 pacing
-        4. closed-loop 보정
+        학습 모델 궤적 + 직접 pacing + closed-loop 보정으로 절대좌표 이동.
         """
-        self.last_trajectory = []
-
         # 0) 기존 큐 명령이 Arduino에서 완전히 소화될 때까지 대기
         #    (OP_SLEEP 중 dMouse가 TCP 버퍼에 쌓이는 문제 방지)
         self._wait_queue_drain(timeout=10.0)
         time.sleep(0.03)  # Arduino 측 잔여 OP 처리 여유
 
         start_x, start_y = get_mouse_pos()
-        self.last_trajectory.append((start_x, start_y))
 
         total_dist = math.hypot(target_x - start_x, target_y - start_y)
         if total_dist <= stop_dist:
             return
 
-        # 1) HumanCursor 파이프라인으로 곡선 포인트 생성
-        curve_points = self._generate_curve(
+        # 1) 학습 모델로 8ms cadence 궤적 생성 (모델 필수)
+        model_pts = self._generate_curve_model(
             (float(start_x), float(start_y)),
-            (float(target_x), float(target_y))
+            (float(target_x), float(target_y)),
         )
+        if model_pts is None:
+            raise RuntimeError(
+                "학습 모델 궤적 생성 실패. mouse_model/checkpoints/model.pt 확인 "
+                "(python -m mouse_model.train 으로 생성)."
+            )
 
-        # 마지막 포인트를 정확히 목표로 고정
-        curve_points[-1] = (float(target_x), float(target_y))
-
-        # 2) duration 계산 (HumanCursor와 동일: 0.5~2.0초 랜덤)
+        # 모델은 이미 8ms cadence로 출력 → 리샘플 불필요. duration은 스텝 수에서 자연 결정.
+        resampled = [(float(x), float(y)) for x, y in model_pts]
+        resampled[-1] = (float(target_x), float(target_y))
         if duration is None:
-            duration = random.uniform(0.5, 2.0)
+            duration = max((len(resampled) - 1) * self._CMD_INTERVAL_S,
+                           self._CMD_INTERVAL_S)
 
-        # 3) 커맨드 수를 duration에 맞게 제한
-        max_cmds = max(int(duration / self._CMD_INTERVAL_S), 2)
-        n_out = min(len(curve_points), max_cmds)
-
-        # 리샘플링으로 커맨드 수 제한
-        resampled = self._resample_curve(curve_points, n_out)
-
-        # trajectory 기록
-        for pt in resampled:
-            self.last_trajectory.append((int(pt[0]), int(pt[1])))
-
-        # 4) 리샘플링된 포인트 → dMouse 커맨드 변환
+        # 2) 포인트 → dMouse 커맨드 변환
         commands = self._points_to_commands(resampled)
-
         if not commands:
             return
 
-        # 5) Arduino에 직접 전송 + 정밀 pacing
+        # 3) Arduino에 직접 전송 + 정밀 pacing
         #    consumer 큐를 우회하고 lock으로 소켓 접근 동기화
         from arduino import ardu
 
@@ -587,7 +353,7 @@ class HumanMouseController:
         if remaining > 0:
             self._precise_sleep(remaining)
 
-        # 6) Closed-loop 정밀 보정 (작은 step으로 분할)
+        # 4) Closed-loop 정밀 보정 (작은 step으로 분할)
         MAX_CORR_STEP = 5  # 보정 1회 최대 이동량 (px)
         time.sleep(0.02)
         for attempt in range(200):
@@ -618,36 +384,5 @@ class HumanMouseController:
                 ardu.send(packet)
             self._precise_sleep(0.008)
 
-    # ============ 동선 조회/플롯 ============ #
-
-    def get_last_trajectory(self):
-        return list(self.last_trajectory)
-
-    def plot_last_trajectory(self, show: bool = True, save_path: str | None = None):
-        if not self.last_trajectory:
-            print("[HumanMouseController] last_trajectory 가 비어 있습니다.")
-            return
-
-        import matplotlib.pyplot as plt
-
-        xs, ys = zip(*self.last_trajectory)
-
-        plt.figure()
-        plt.plot(xs, ys, marker='o', markersize=2, linewidth=1)
-        plt.title("Last Mouse Trajectory")
-        plt.xlabel("X (pixels)")
-        plt.ylabel("Y (pixels)")
-        plt.gca().invert_yaxis()
-        plt.axis("equal")
-
-        if save_path is not None:
-            plt.savefig(save_path, dpi=150, bbox_inches="tight")
-
-        if show:
-            plt.show()
-        else:
-            plt.close()
-
 
 human_mouse = HumanMouseController()
-

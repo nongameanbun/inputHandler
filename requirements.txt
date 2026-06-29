@@ -1,3 +1,12 @@
 fastapi
 uvicorn
 python-dotenv
+
+# mouse_model (사람같은 곡선 학습)
+numpy
+torch
+pygame
+matplotlib
+scikit-learn   # 사람다움 판별기(AUC) 평가용
+pyautogui      # gather.ipynb 커서 위치 폴링
+humancursor    # gather.ipynb 실행 기반 합성 데이터 수집
