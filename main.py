@@ -5,6 +5,7 @@ from HID import human_mouse
 from threading import Thread
 import random
 import uvicorn
+import pyperclip
 
 app = FastAPI(title="Input Handler API", description="게임 입력 처리 서버")
 
@@ -98,6 +99,10 @@ async def press_two_key(key1: str, key2: str):
         final_delay_ms += rd
 
     return {"resp": final_delay_ms}
+
+@app.get("/clipboard/get", summary="클립보드 읽기", tags=["키 입력"])
+async def clipboard_get():
+    return {"resp": pyperclip.paste()}
 
 mouse_router = APIRouter(prefix="/mouse", tags=["마우스"])
 

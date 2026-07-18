@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 python-dotenv
+pyperclip
 
 # mouse_model (사람같은 곡선 학습)
 numpy
