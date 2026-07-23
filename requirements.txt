@@ -5,9 +5,11 @@ pyperclip
 
 # mouse_model (사람같은 곡선 학습)
 numpy
-torch
+torch           # 학습(train.py)에만 필요
+onnx            # export_onnx.py: model.pt -> model.onnx 변환에 필요
+onnxruntime     # 런타임 추론(sample.py)에 필요
 pygame
 matplotlib
 scikit-learn   # 사람다움 판별기(AUC) 평가용
-pyautogui      # gather.ipynb 커서 위치 폴링
-humancursor    # gather.ipynb 실행 기반 합성 데이터 수집
+pyautogui      # gather_synthetic.py 커서 위치 폴링
+humancursor    # gather_synthetic.py 합성 데이터 생성 베이스라인
